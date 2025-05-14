@@ -21,27 +21,65 @@ typedef struct {
     uint32_t first_data_block;
     uint32_t inode_size;
     uint32_t inode_count;
+    uint8_t reserved[4058];
 } Superblock;
 
+typedef struct {
+    uint32_t mode;                    
+    uint32_t uid;                    
+    uint32_t gid;                     
+    uint32_t file_size;                
+    uint32_t last_access_time;       
+    uint32_t creation_time;          
+    uint32_t last_modification_time;
+    uint32_t deletion_time;
+    uint32_t hard_links;
+    uint32_t data_blocks;
+    uint32_t direct_block;
+    uint32_t single_indirect_block;
+    uint32_t double_indirect_block;
+    uint32_t triple_indirect_block;
+    uint8_t reserved[156];
+} Inode;
+
 int superblock_validator(Superblock *sb);
+void inode_bitmap_validator(FILE *fs, uint8_t *inode_bitmap, uint32_t inode_table_start);
 
-int main(int argc, char *argv[]){
-if (argc != 2){
-  printf("File Input Error\n");
-  return 1;
+int main(int argc, char *argv[]) {
+    if (argc != 2) {
+        printf("File Input Error\n");
+        return 1;
+    }
+
+    FILE *fs = fopen(argv[1], "r+b");
+
+    Superblock sb;
+    fseek(fs, 0, SEEK_SET);
+    fread(&sb, sizeof(Superblock), 1, fs);  // Superblock read kore stores into the sb struct
+
+    superblock_validator(&sb);
+    if (update == 1) { // Jodi superblock e issue update hy actual superblock e upadate korte hobe
+        fseek(fs, 0, SEEK_SET);
+        fwrite(&sb, sizeof(Superblock), 1, fs);
+        update = 0; 
+        printf("Fix: Superblock updated successfully.\n");
+    }
+
+    uint8_t inode_bitmap[BLOCK_SIZE] = {0};
+
+    fseek(fs, sb.inode_bitmap_block * BLOCK_SIZE, SEEK_SET); // inode bitmap block e seek
+    fread(inode_bitmap, BLOCK_SIZE, 1, fs); 
+    inode_bitmap_validator(fs, inode_bitmap, sb.inode_table_start);
+    if (update == 1) { // Jodi inode bitmap e issue update hy actual inode bitmap e update korte hobe
+        fseek(fs, sb.inode_bitmap_block * BLOCK_SIZE, SEEK_SET);
+        fwrite(inode_bitmap, BLOCK_SIZE, 1, fs); 
+        update = 0;
+        printf("Fix: Inode Bitmap updated successfully.\n");
+    }
+
+    fclose(fs);
+    return 0;
 }
-
-FILE *fd = fopen(argv[1], "r+b");
-Superblock sb;
-fread(&sb, sizeof(Superblock), 1, fd); // Superblock read kore stores into the sb struct
-
-if (update == 1){ // Jodi superblock e issue update hy actual superblock e upadate korte hobe
-  fseek(fd, 0, SEEK_SET);
-  fwrite(&sb, sizeof(Superblock), 1, fd); 
-  update = 0;
-  printf("Fix: Superblock updated successfully.\n");
-}
-
 
 int superblock_validator(Superblock *sb){
   if (sb->magic != SUPERBLOCK_MAGIC){ // Should be 0xD34D
@@ -64,7 +102,7 @@ int superblock_validator(Superblock *sb){
     sb->inode_bitmap_block = 1;
     update = 1;
   }
-  if (sb->data_bitmap_block != 1){ // Block 2 e dbitmap
+  if (sb->data_bitmap_block != 2){ // Block 2 e dbitmap
     printf("Issue: Superblock | Data Bitmap block is incorrect.\n");
     sb->data_bitmap_block = 2;
     update = 1;
@@ -84,6 +122,34 @@ int superblock_validator(Superblock *sb){
     sb->inode_size = INODE_SIZE;
     update = 1;
   }
+  if (sb->inode_count > (BLOCK_SIZE * 5) / INODE_SIZE) { // Check inode count
+    printf("Issue: Superblock | Inode Count exceeds maximum capacity.\n");
+    sb->inode_count = (BLOCK_SIZE * 5) / INODE_SIZE;
+    update = 1;
+    }
 
   return 0;
+}
+
+
+void inode_bitmap_validator(FILE *fs, uint8_t *inode_bitmap, uint32_t inode_table_start) {
+    for (int i = 0; i < INODE_COUNT; i++) {
+        Inode inode;
+        fseek(fs, inode_table_start * BLOCK_SIZE + i * INODE_SIZE, SEEK_SET);
+        fread(&inode, sizeof(Inode), 1, fs);
+
+        if (inode_bitmap[i / 8] & (1 << (i % 8))) { // inode used dekhaitese bitmap kintu ashole invalid
+            if (inode.hard_links == 0 || inode.deletion_time != 0) { // inode is invalid
+                printf("Issue: Inode Bitbam | Inode %d marked as used but is invalid.\n", i);
+                inode_bitmap[i / 8] &= ~(1 << (i % 8)); // update bitmap to unused
+                update = 1;
+            }
+        } else { // inode unused dekhaitese bitmap kintu ashole valid
+            if (inode.hard_links > 0 && inode.deletion_time == 0) {
+                printf("Issue: Inode Bitbam | Inode %d is valid but not marked as used in the bitmap.\n", i);
+                inode_bitmap[i / 8] |= (1 << (i % 8)); // update bitmap to used
+                update = 1;
+            }
+        }
+    }
 }
