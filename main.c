@@ -45,6 +45,8 @@ typedef struct {
 int superblock_validator(Superblock *sb);
 void inode_bitmap_validator(FILE *fs, uint8_t *inode_bitmap, uint32_t inode_table_start);
 void data_bitmap_validator(FILE *fs, uint8_t *data_bitmap, uint32_t first_data_block, uint8_t *block_usage);
+void duplicate_blocks(uint8_t *block_usage);
+void bad_blocks(uint8_t *block_usage);
 
 
 int main(int argc, char *argv[]) {
@@ -95,6 +97,19 @@ int main(int argc, char *argv[]) {
         fwrite(data_bitmap, BLOCK_SIZE, 1, fs);
         update = 0; // Reset the update flag
         printf("Fix: Data Bitmap updated successfully.\n");
+    }
+
+    duplicate_blocks(block_usage);
+    if (update == 1) {
+        printf("Fix: Duplicate block issues updated successfully.\n");
+        update = 0; 
+    }
+
+    // Check for bad blocks
+    bad_blocks(block_usage);
+    if (update == 1) {
+        printf("Fix: Bad block issues updated successfully.\n");
+        update = 0; 
     }
 
     fclose(fs);
@@ -199,6 +214,26 @@ void data_bitmap_validator(FILE *fs, uint8_t *data_bitmap, uint32_t first_data_b
                 data_bitmap[i / 8] |= (1 << (i % 8)); 
                 update = 1;
             }
+        }
+    }
+}
+
+void duplicate_blocks(uint8_t *block_usage) {
+    for (int i = 0; i < TOTAL_BLOCKS; i++) {
+        if (block_usage[i] > 1) { // Same block er jonno multiiple inode
+            printf("Issue: Duplicate Block | Block %d is referenced by multiple inodes.\n", i);
+            block_usage[i] = 1;
+            update = 1; 
+        }
+    }
+}
+
+void bad_blocks(uint8_t *block_usage) {
+    for (int i = 0; i < TOTAL_BLOCKS; i++) {
+        if (block_usage[i] > 0 && (i < 8 || i >= TOTAL_BLOCKS)) { // Data block range er bahire
+            printf("Issue: Bad Block | Block %d is outside the valid range.\n", i);
+            block_usage[i] = 0; 
+            update = 1; 
         }
     }
 }
