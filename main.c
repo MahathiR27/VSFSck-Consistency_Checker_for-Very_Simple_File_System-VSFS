@@ -44,6 +44,8 @@ typedef struct {
 
 int superblock_validator(Superblock *sb);
 void inode_bitmap_validator(FILE *fs, uint8_t *inode_bitmap, uint32_t inode_table_start);
+void data_bitmap_validator(FILE *fs, uint8_t *data_bitmap, uint32_t first_data_block, uint8_t *block_usage);
+
 
 int main(int argc, char *argv[]) {
     if (argc != 2) {
@@ -75,6 +77,24 @@ int main(int argc, char *argv[]) {
         fwrite(inode_bitmap, BLOCK_SIZE, 1, fs); 
         update = 0;
         printf("Fix: Inode Bitmap updated successfully.\n");
+    }
+    
+    uint8_t data_bitmap[BLOCK_SIZE] = {0}; // Declare data bitmap
+    uint8_t block_usage[TOTAL_BLOCKS] = {0}; // Declare block usage tracker
+
+    // Read the data bitmap
+    fseek(fs, sb.data_bitmap_block * BLOCK_SIZE, SEEK_SET);
+    fread(data_bitmap, BLOCK_SIZE, 1, fs);
+
+    // Validate and fix the data bitmap
+    data_bitmap_validator(fs, data_bitmap, sb.first_data_block, block_usage);
+
+    // Write back the updated data bitmap if any issues were fixed
+    if (update == 1) {
+        fseek(fs, sb.data_bitmap_block * BLOCK_SIZE, SEEK_SET);
+        fwrite(data_bitmap, BLOCK_SIZE, 1, fs);
+        update = 0; // Reset the update flag
+        printf("Fix: Data Bitmap updated successfully.\n");
     }
 
     fclose(fs);
@@ -140,14 +160,43 @@ void inode_bitmap_validator(FILE *fs, uint8_t *inode_bitmap, uint32_t inode_tabl
 
         if (inode_bitmap[i / 8] & (1 << (i % 8))) { // inode used dekhaitese bitmap kintu ashole invalid
             if (inode.hard_links == 0 || inode.deletion_time != 0) { // inode is invalid
-                printf("Issue: Inode Bitbam | Inode %d marked as used but is invalid.\n", i);
+                printf("Issue: Inode bitmap | Inode %d marked as used but is invalid.\n", i);
                 inode_bitmap[i / 8] &= ~(1 << (i % 8)); // update bitmap to unused
                 update = 1;
             }
         } else { // inode unused dekhaitese bitmap kintu ashole valid
             if (inode.hard_links > 0 && inode.deletion_time == 0) {
-                printf("Issue: Inode Bitbam | Inode %d is valid but not marked as used in the bitmap.\n", i);
+                printf("Issue: Inode bitmap | Inode %d is valid but not marked as used in the bitmap.\n", i);
                 inode_bitmap[i / 8] |= (1 << (i % 8)); // update bitmap to used
+                update = 1;
+            }
+        }
+    }
+}
+
+void data_bitmap_validator(FILE *fs, uint8_t *data_bitmap, uint32_t first_data_block, uint8_t *block_usage) {
+    for (int i = 0; i < INODE_COUNT; i++) {
+        Inode inode;
+        fseek(fs, first_data_block * BLOCK_SIZE + i * INODE_SIZE, SEEK_SET);
+        fread(&inode, sizeof(Inode), 1, fs);
+
+        if (inode.hard_links > 0 && inode.deletion_time == 0) {
+            if (inode.direct_block >= first_data_block && inode.direct_block < TOTAL_BLOCKS) {
+                block_usage[inode.direct_block]++;
+            }
+        }
+    }
+    for (int i = first_data_block; i < TOTAL_BLOCKS; i++) { // Inconsistancy
+        if (data_bitmap[i / 8] & (1 << (i % 8))) { // Block used in bitmap kintu no inode
+            if (block_usage[i] == 0) { 
+                printf("Issue: Data Bitmap | Block %d marked as used in bitmap but not referenced by any inode.\n", i);
+                data_bitmap[i / 8] &= ~(1 << (i % 8)); // Unused banay
+                update = 1;
+            }
+        } else { // Block unused in bitmap kintu yes inode
+            if (block_usage[i] > 0) {
+                printf("Issue: Data Bitmap | Block %d referenced by an inode but not marked as used in bitmap.\n", i);
+                data_bitmap[i / 8] |= (1 << (i % 8)); 
                 update = 1;
             }
         }
